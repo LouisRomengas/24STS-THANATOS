@@ -1,0 +1,532 @@
+from pyspark.sql.types import BooleanType
+from pyspark.sql.functions import expr
+import re
+
+def is_document_annule(note_text):
+    if note_text is None:
+        return True
+    cleaned = re.sub(r'\s+', '', note_text.upper())
+    return bool(re.search(r'DOCUMENTANNUL[EÉ]', cleaned))
+
+spark.udf.register("is_document_annule_udf", is_document_annule, BooleanType())
+
+surgery_types = {
+    "oesophage_estomac": [
+        "ADPA002", "ADPA014", "ADPA018", "ADPA019", "ADPA022", "ADPA024",
+        "ADPC001", "ADPC002", "ADPC003", "ADPC004", "EHAA001", "EHCA001",
+        "EHCA002", "EHCA003", "EHCA004", "EHCA005", "EHCA006", "EHCA007",
+        "EHCA009", "EHCA010", "HASA012", "HDFA012", "HDFA014", "HDFA015",
+        "HDFA016", "HDGA001", "HECA001", "HECA002", "HECA003", "HECA004",
+        "HECA005", "HECC001", "HEDA001", "HEFA001", "HEFA002", "HEFA003",
+        "HEFA004", "HEFA005", "HEFA006", "HEFA007", "HEFA008", "HEFA009",
+        "HEFA010", "HEFA011", "HEFA012", "HEFA013", "HEFA014", "HEFA015",
+        "HEFA016", "HEFA017", "HEFA018", "HEFA019", "HEFA020", "HEFA021",
+        "HEFA022", "HEFC001", "HEFC002", "HEFC003", "HEFC800", "HEMA001",
+        "HEMA002", "HEMA003", "HEMA004", "HEMA005", "HEMA006", "HEMA007",
+        "HEMA008", "HEMA009", "HEPA001", "HEPA002", "HEPA003", "HEPA004",
+        "HEPA005", "HEPA006", "HEPA007", "HEPC001", "HEPC002", "HEPC003",
+        "HEPC004", "HESA001", "HESA002", "HESA004", "HESA005", "HESA006",
+        "HESA007", "HESA008", "HESA009", "HFCA001", "HFCA002", "HFCA003",
+        "HFCA004", "HFCC001", "HFCC002", "HFCC003", "HFCC022", "HFDA001",
+        "HFDA002", "HFDC001", "HFDC002", "HFFA001", "HFFA002", "HFFA003",
+        "HFFA004", "HFFA005", "HFFA006", "HFFA007", "HFFA008", "HFFA009",
+        "HFFA010", "HFFA011", "HFFC001", "HFFC002", "HFFC003", "HFFC004",
+        "HFFC012", "HFFC017", "HFFC018", "HFKA002", "HFKC001", "HFMA001",
+        "HFMA003", "HFMA004", "HFMA005", "HFMA007", "HFMA008", "HFMA009",
+        "HFMA010", "HFMA011", "HFMC001", "HFMC003", "HFMC004", "HFMC006",
+        "HFMC007", "HFMC008", "HFPA001", "HFPA002", "HFPA003", "HFPC001",
+        "HGCA003", "HGCA006", "HGCA007", "HGCA009", "HGCC027", "HGMA002",
+        "HGPA001", "HGPA005", "HNCA003", "HNCA004", "HNFA004", "HNFA007",
+        "LLCA001", "LLCA002", "LLFA003", "LLFA013", "LLMA001", "LLMA002",
+        "LLMA004", "LLMA005", "LLMA006", "LLMA007", "LLMA009", "LLMA010",
+        "LLMC001", "LLMC004", "LLMC005"
+    ],
+    "rectum": [
+        "HHFA028", "HHFA029", "HHFA030", "HHFA031", "HJFA001", "HJFA002",
+        "HJFA004", "HJFA005", "HJFA006", "HJFA007", "HJFA011", "HJFA012",
+        "HJFA014", "HJFA017", "HJFA019", "HJFC023", "HJFC031", "JFFA002",
+        "JFFA004", "JFFA005", "JFFA008", "JFFA011", "JFFA013"
+    ],
+    "colon": [
+        "HGAA002", "HGAA003", "HGAC010", "HGCA001", "HGCA002", "HGCA005",
+        "HGCC003", "HGCC015", "HGCC031", "HGEA001", "HGEC001", "HGFA001",
+        "HGFA003", "HGFA004", "HGFA005", "HGFA007", "HGFA008", "HGFA009",
+        "HGFA010", "HGFA011", "HGFA012", "HGFA013", "HGFC001", "HGFC014",
+        "HGFC016", "HGFC021", "HGPA004", "HGPA006", "HGPC015", "HHCA001",
+        "HHCA002", "HHCA003", "HHCC001", "HHCC007", "HHCC011", "HHFA002",
+        "HHFA003", "HHFA004", "HHFA005", "HHFA006", "HHFA008", "HHFA009",
+        "HHFA010", "HHFA014", "HHFA017", "HHFA018", "HHFA021", "HHFA022",
+        "HHFA023", "HHFA024", "HHFA026", "HHFC040", "HHFC296", "HHMA003",
+        "HHMC001", "HJEA002", "HJEA003", "HJEA004", "HJFA010", "HJFA015",
+        "HJFA016", "HJFA020", "HJFC001", "HJFC002", "HJFC003", "HJFD003",
+        "HJSA001", "JDSA011"
+    ],
+    "foie_pancreas": [
+        "EHAA001", "EHCA001", "EHCA002", "EHCA003", "EHCA004", "EHCA005",
+        "EHCA006", "EHCA007", "EHCA008", "EHCA009", "EHCA010", "EHFA001",
+        "HLCA002", "HLCC001", "HLFA002", "HLFA003", "HLFA004", "HLFA005",
+        "HLFA006", "HLFA007", "HLFA009", "HLFA010", "HLFA011", "HLFA012",
+        "HLFA014", "HLFA015", "HLFA017", "HLFA018", "HLFA019", "HLFA020",
+        "HLFC002", "HLFC003", "HLFC004", "HLFC027", "HLFC032", "HLFC037",
+        "HLFC801", "HLJA001", "HLJC001", "HLNA007", "HLNC003", "HLSA001",
+        "HLSC012", "HNCA001", "HNCA002", "HNCA003", "HNCA004", "HNCA005",
+        "HNCA006", "HNCA007", "HNCA008", "HNCC021", "HNCC033", "HNFA001",
+        "HNFA002", "HNFA004", "HNFA005", "HNFA006", "HNFA007", "HNFA008",
+        "HNFA010", "HNFA011", "HNFA012", "HNFA013", "HNFC001", "HNFC002",
+        "HNFC027", "HNFC028", "HNJA001", "HNJC001", "HPCA001"
+    ],
+    "voies_biliaires": [
+        "HFCA004", "HGFA014", "HLCA001", "HMCA001", "HMCA002", "HMCA003",
+        "HMCA004", "HMCA005", "HMCA006", "HMCA007", "HMCA008", "HMCA010",
+        "HMCA011", "HMCC001", "HMCC002", "HMCC003", "HMFA001", "HMFA002",
+        "HMFA005", "HMFA006", "HMFA009", "HMFA010", "HMFC003", "HMFC005",
+        "HMCA009", "HMFA003", "HMFA004", "HMFA008", "HMFC001", "HMFC002",
+        "HMGA001", "HMGC001", "HMLA001", "HMLC001"
+    ]
+}
+
+ghm_to_surgery_type = {
+    "06C05": "oesophage_estomac", "06C16": "oesophage_estomac",
+    "06C20": "oesophage_estomac", "06C22": "oesophage_estomac",
+    "10C09": "oesophage_estomac",
+    "06C03": "rectum",
+    "06C04": "colon",
+    "07C09": "foie_pancreas", "07C10": "foie_pancreas",
+    "07C11": "voies_biliaires", "07C12": "voies_biliaires"
+}
+
+def get_patient_procedures(spark, major_surgery_ccam_codes, current_surgery_type=None):
+    ccam_codes_df = spark.createDataFrame(
+        [(code,) for code in major_surgery_ccam_codes], ["ccam_code"]
+    )
+    ccam_codes_df.createOrReplaceTempView("major_surgery_codes")
+
+    procedures_df = spark.sql("""
+        SELECT
+            p.person_id,
+            p.procedure_date,
+            p.procedure_source_value AS ccam_code
+        FROM procedure_occurrence p
+        WHERE p.cdm_source = 'AREM'
+          AND p.row_status_source_value = 'Actif'
+    """)
+    procedures_df.createOrReplaceTempView("all_procedures")
+
+    major_surgeries = spark.sql("""
+        SELECT DISTINCT
+            p.person_id,
+            p.procedure_date AS surgery_date,
+            p.ccam_code AS surgery_ccam
+        FROM all_procedures p
+        JOIN major_surgery_codes msc ON p.ccam_code = msc.ccam_code
+    """)
+    major_surgeries.createOrReplaceTempView("all_major_surgeries")
+
+    spark.sql("""
+    CREATE OR REPLACE TEMPORARY VIEW all_surgeries_with_prev AS
+    SELECT
+        person_id,
+        surgery_date,
+        surgery_ccam,
+        LAG(surgery_date) OVER (
+            PARTITION BY person_id ORDER BY surgery_date
+        ) AS prev_surgery_date
+    FROM all_major_surgeries
+    """)
+
+    major_surgeries_independent = spark.sql("""
+        SELECT
+            aws.person_id,
+            aws.surgery_date,
+            aws.surgery_ccam
+        FROM all_surgeries_with_prev aws
+        WHERE aws.surgery_date BETWEEN '2020-01-01' AND '2022-12-31'
+          AND (
+              aws.prev_surgery_date IS NULL
+              OR DATEDIFF(aws.surgery_date, aws.prev_surgery_date) > 90
+          )
+    """)
+    major_surgeries_independent.createOrReplaceTempView("major_surgeries")
+
+    print(
+        "Chirurgies majeures independantes 2020-2022 :",
+        major_surgeries_independent.count()
+    )
+
+    if current_surgery_type is not None and current_surgery_type in surgery_types:
+        all_surgery_types_codes = []
+
+        for category, codes in surgery_types.items():
+            if category != current_surgery_type:
+                all_surgery_types_codes.extend(codes)
+
+        other_surgery_types_df = spark.createDataFrame(
+            [(code,) for code in all_surgery_types_codes], ["ccam_code"]
+        )
+        other_surgery_types_df.createOrReplaceTempView("other_surgery_types_codes")
+
+        spark.sql("""
+        CREATE OR REPLACE TEMPORARY VIEW multiple_surgery_types_same_day AS
+        SELECT DISTINCT
+            p1.person_id,
+            p1.procedure_date
+        FROM all_procedures p1
+        JOIN major_surgery_codes msc ON p1.ccam_code = msc.ccam_code
+        JOIN all_procedures p2 ON
+            p1.person_id = p2.person_id AND
+            p1.procedure_date = p2.procedure_date
+        JOIN other_surgery_types_codes ostc ON p2.ccam_code = ostc.ccam_code
+        WHERE p1.procedure_date BETWEEN '2020-01-01' AND '2022-12-31'
+        """)
+
+        multiple_surgeries_count = spark.sql("""
+            SELECT COUNT(DISTINCT person_id) AS count
+            FROM multiple_surgery_types_same_day
+        """).collect()[0]["count"]
+
+        print(
+            "Patients avec plusieurs types de chirurgies le meme jour :",
+            multiple_surgeries_count
+        )
+
+        spark.sql("""
+        CREATE OR REPLACE TEMPORARY VIEW patient_surgeries AS
+        SELECT
+            m.person_id,
+            m.surgery_date,
+            m.surgery_ccam,
+            CASE WHEN mstsd.person_id IS NOT NULL THEN true ELSE false END
+                AS has_multiple_types,
+            LAG(m.surgery_date) OVER (
+                PARTITION BY m.person_id ORDER BY m.surgery_date
+            ) AS prev_surgery_date
+        FROM major_surgeries m
+        LEFT JOIN multiple_surgery_types_same_day mstsd
+            ON m.person_id = mstsd.person_id
+           AND m.surgery_date = mstsd.procedure_date
+        """)
+    else:
+        spark.sql("""
+        CREATE OR REPLACE TEMPORARY VIEW patient_surgeries AS
+        SELECT
+            person_id,
+            surgery_date,
+            surgery_ccam,
+            false AS has_multiple_types,
+            LAG(surgery_date) OVER (
+                PARTITION BY person_id ORDER BY surgery_date
+            ) AS prev_surgery_date
+        FROM major_surgeries
+        """)
+
+    spark.sql("""
+    CREATE OR REPLACE TEMPORARY VIEW followup_procedures AS
+    SELECT
+        ps.person_id,
+        ps.surgery_date,
+        p.procedure_date AS followup_date,
+        p.procedure_source_value AS followup_ccam,
+        DATEDIFF(p.procedure_date, ps.surgery_date) AS days_after_surgery
+    FROM patient_surgeries ps
+    JOIN procedure_occurrence p ON ps.person_id = p.person_id
+    WHERE DATEDIFF(p.procedure_date, ps.surgery_date) BETWEEN 1 AND 90
+      AND p.cdm_source = 'AREM'
+      AND p.row_status_source_value = 'Actif'
+    """)
+
+    spark.sql("""
+    CREATE OR REPLACE TEMPORARY VIEW prior_diagnoses AS
+    SELECT
+        ps.person_id,
+        ps.surgery_date,
+        c.condition_start_date,
+        c.condition_source_value,
+        DATEDIFF(ps.surgery_date, c.condition_start_date) AS days_before_surgery
+    FROM patient_surgeries ps
+    JOIN condition_occurrence c ON ps.person_id = c.person_id
+    WHERE c.condition_start_date
+          BETWEEN date_sub(ps.surgery_date, 365) AND ps.surgery_date
+      AND c.cdm_source = 'AREM'
+      AND c.row_status_source_value = 'Actif'
+    """)
+
+    spark.sql("""
+    CREATE OR REPLACE TEMPORARY VIEW followup_diagnoses AS
+    SELECT
+        ps.person_id,
+        ps.surgery_date,
+        c.condition_start_date,
+        c.condition_source_value,
+        DATEDIFF(c.condition_start_date, ps.surgery_date) AS days_after_surgery
+    FROM patient_surgeries ps
+    JOIN condition_occurrence c ON ps.person_id = c.person_id
+    WHERE c.condition_start_date
+          BETWEEN ps.surgery_date AND date_add(ps.surgery_date, 90)
+      AND c.cdm_source = 'AREM'
+      AND c.row_status_source_value = 'Actif'
+    """)
+
+    spark.sql("""
+    CREATE OR REPLACE TEMPORARY VIEW all_clinical_reports AS
+    SELECT
+        ps.person_id,
+        ps.surgery_date,
+        n.note_id,
+        n.note_date,
+        n.note_title,
+        n.note_class_source_value AS note_type,
+        n.note_text,
+        DATEDIFF(n.note_date, ps.surgery_date) AS days_after_surgery,
+        is_document_annule_udf(n.note_text) AS is_document_annule,
+        (TRIM(n.note_text) = '' OR n.note_text IS NULL) AS is_empty
+    FROM patient_surgeries ps
+    JOIN note n ON ps.person_id = n.person_id
+    WHERE n.note_date BETWEEN ps.surgery_date AND date_add(ps.surgery_date, 365)
+      AND (
+           n.note_date <= date_add(ps.surgery_date, 180)
+           OR (
+                n.note_date > date_add(ps.surgery_date, 180)
+                AND (
+                     n.note_class_source_value IN
+                         ('CRH-HOSPI', 'CRH-J', 'CRH-S', 'CRH-CHIR', 'SYNTH')
+                     OR LOWER(n.note_title) LIKE '%hospit%'
+                     OR LOWER(n.note_title) LIKE '%sortie%'
+                     OR LOWER(n.note_title) LIKE '%séjour%'
+                     OR LOWER(n.note_title) LIKE '%sejour%'
+                     OR (LOWER(n.note_title) LIKE '%cr%'
+                         AND LOWER(n.note_title) LIKE '%h%')
+                )
+           )
+      )
+    """)
+
+    annule_notes_count = spark.sql("""
+        SELECT COUNT(*) AS count FROM all_clinical_reports
+        WHERE is_document_annule = true
+    """).collect()[0]["count"]
+
+    print("CR contenant 'DOCUMENT ANNULE' :", annule_notes_count)
+
+    empty_notes_count = spark.sql("""
+        SELECT COUNT(*) AS count FROM all_clinical_reports WHERE is_empty = true
+    """).collect()[0]["count"]
+
+    print("CR vides :", empty_notes_count)
+
+    spark.sql("""
+    CREATE OR REPLACE TEMPORARY VIEW clinical_reports AS
+    SELECT
+        acr.person_id,
+        acr.surgery_date,
+        acr.note_date,
+        acr.note_title,
+        acr.note_type,
+        acr.note_text,
+        acr.days_after_surgery
+    FROM all_clinical_reports acr
+    WHERE acr.is_document_annule = false
+      AND acr.is_empty = false
+    """)
+
+    spark.sql("""
+    CREATE OR REPLACE TEMPORARY VIEW diagnoses_json AS
+    SELECT
+        person_id,
+        surgery_date,
+        CONCAT(
+          '{\n  "prior_diagnoses": [\n    ',
+          CONCAT_WS(',\n    ',
+            sort_array(
+              collect_set(
+                CONCAT(
+                  '{"date": "', condition_start_date, '",',
+                  ' "code": "', condition_source_value, '",',
+                  ' "days_before": ', days_before_surgery, '}'
+                )
+              )
+            )
+          ),
+          '\n  ]\n}'
+        ) AS prior_diagnoses_json
+    FROM prior_diagnoses
+    GROUP BY person_id, surgery_date
+    """)
+
+    spark.sql("""
+    CREATE OR REPLACE TEMPORARY VIEW followup_diagnoses_json AS
+    SELECT
+        person_id,
+        surgery_date,
+        CONCAT(
+          '{\n  "follow_up_diagnoses": [\n    ',
+          CONCAT_WS(',\n    ',
+            sort_array(
+              collect_set(
+                CONCAT(
+                  '{"date": "', condition_start_date, '",',
+                  ' "code": "', condition_source_value, '",',
+                  ' "days_after": ', days_after_surgery, '}'
+                )
+              )
+            )
+          ),
+          '\n  ]\n}'
+        ) AS followup_diagnoses_json
+    FROM followup_diagnoses
+    GROUP BY person_id, surgery_date
+    """)
+
+    spark.sql("""
+    CREATE OR REPLACE TEMPORARY VIEW procedures_json AS
+    SELECT
+        person_id,
+        surgery_date,
+        CONCAT(
+          '{\n  "procedures": [\n    ',
+          CONCAT_WS(',\n    ',
+            sort_array(
+              collect_set(
+                CONCAT(
+                  '{"date": "', followup_date, '",',
+                  ' "ccam": "', followup_ccam, '",',
+                  ' "days_after": ', days_after_surgery, '}'
+                )
+              )
+            )
+          ),
+          '\n  ]\n}'
+        ) AS procedures_json
+    FROM followup_procedures
+    GROUP BY person_id, surgery_date
+    """)
+
+    spark.sql("""
+    CREATE OR REPLACE TEMPORARY VIEW reports_json AS
+    SELECT
+        person_id,
+        surgery_date,
+        CONCAT(
+          '{\n  "reports": [\n    ',
+          CONCAT_WS(',\n    ',
+            sort_array(
+              collect_list(
+                CONCAT(
+                  '{"date": "', note_date, '",',
+                  ' "title": "',
+                  COALESCE(regexp_replace(note_title, '"', '\\"'), ''), '",',
+                  ' "type": "', COALESCE(note_type, ''), '",',
+                  ' "text": "',
+                  COALESCE(regexp_replace(note_text, '"', '\\"'), ''), '"}'
+                )
+              )
+            )
+          ),
+          '\n  ]\n}'
+        ) AS reports_json
+    FROM clinical_reports
+    GROUP BY person_id, surgery_date
+    """)
+
+    result_df = spark.sql("""
+    SELECT
+        ps.person_id,
+        ps.surgery_date AS major_surgery_date,
+        ps.surgery_ccam AS major_surgery_ccam,
+        ps.has_multiple_types,
+        v.visit_occurrence_id,
+        DATEDIFF(ps.surgery_date, ps.prev_surgery_date)
+            AS days_since_previous_surgery,
+        COALESCE(proc.procedures_json, '{"procedures": []}') AS followup_info,
+        COALESCE(rep.reports_json, '{"reports": []}') AS cr_info,
+        CONCAT(
+          '{\n  "prior_diagnoses": ',
+          COALESCE(
+            get_json_object(diag_prior.prior_diagnoses_json, '$.prior_diagnoses'),
+            '[]'
+          ),
+          ',\n  "follow_up_diagnoses": ',
+          COALESCE(
+            get_json_object(
+              diag_follow.followup_diagnoses_json, '$.follow_up_diagnoses'
+            ),
+            '[]'
+          ),
+          '\n}'
+        ) AS diagnoses_info
+    FROM patient_surgeries ps
+    LEFT JOIN visit_occurrence v
+        ON ps.person_id = v.person_id
+        AND v.visit_start_date <= ps.surgery_date
+        AND (v.visit_end_date >= ps.surgery_date OR v.visit_end_date IS NULL)
+        AND v.cdm_source = 'ORBIS'
+    LEFT JOIN procedures_json proc
+        ON ps.person_id = proc.person_id AND ps.surgery_date = proc.surgery_date
+    LEFT JOIN reports_json rep
+        ON ps.person_id = rep.person_id AND ps.surgery_date = rep.surgery_date
+    LEFT JOIN diagnoses_json diag_prior
+        ON ps.person_id = diag_prior.person_id
+       AND ps.surgery_date = diag_prior.surgery_date
+    LEFT JOIN followup_diagnoses_json diag_follow
+        ON ps.person_id = diag_follow.person_id
+       AND ps.surgery_date = diag_follow.surgery_date
+    WHERE ps.prev_surgery_date IS NULL
+       OR DATEDIFF(ps.surgery_date, ps.prev_surgery_date) > 90
+    ORDER BY ps.person_id, ps.surgery_date
+    """)
+
+    return result_df
+
+def adjust_surgery_category_with_ghm(spark, df):
+    df.createOrReplaceTempView("surgeries_to_adjust")
+
+    ghm_mapping_df = spark.createDataFrame(
+        list(ghm_to_surgery_type.items()), ["ghm_code", "surgery_type"]
+    )
+    ghm_mapping_df.createOrReplaceTempView("ghm_mapping")
+
+    result_df = spark.sql("""
+        SELECT
+            s.*,
+            CASE
+                WHEN s.has_multiple_types = false THEN s.ccam_category
+                WHEN s.has_multiple_types = true AND ghm.surgery_type IS NOT NULL
+                    THEN ghm.surgery_type
+                ELSE 'autre'
+            END AS surgery_category
+        FROM surgeries_to_adjust s
+        LEFT JOIN (
+            SELECT
+                c.cost_event_id,
+                gm.surgery_type
+            FROM cost c
+            JOIN ghm_mapping gm
+                ON SUBSTRING(c.drg_source_value, 1, 5) = gm.ghm_code
+            WHERE c.cost_type_source_value = 'GHM'
+              AND c.row_status_source_value = 'Actif'
+        ) ghm ON s.visit_occurrence_id = ghm.cost_event_id
+    """)
+
+    return result_df
+
+all_cases_list = []
+
+for surgery_type, ccam_codes in surgery_types.items():
+    type_cases = get_patient_procedures(spark, ccam_codes, surgery_type)
+    type_cases = type_cases.withColumn("ccam_category", expr(f"'{surgery_type}'"))
+    all_cases_list.append(type_cases)
+
+if all_cases_list:
+    all_cases_combined = all_cases_list[0]
+
+    for df in all_cases_list[1:]:
+        all_cases_combined = all_cases_combined.union(df)
+
+    all_cases_combined = all_cases_combined.dropDuplicates(
+        ["person_id", "major_surgery_date"]
+    )
+
+    all_cases_combined.createOrReplaceTempView("all_cases")
+
+    final_cases = adjust_surgery_category_with_ghm(spark, all_cases_combined)
+
+    final_cases.createOrReplaceTempView("final_cases")

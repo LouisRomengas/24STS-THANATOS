@@ -1,0 +1,85 @@
+SYSTEM_PROMPT = (
+    "Tu es un assistant médical expert en chirurgie "
+    "et en analyse des résultats postopératoires."
+)
+
+KEYS = [
+    "complication_nouvelle",
+    "evenement_temporel_pertinent",
+    "traitement_pharmacologique_specifique",
+    "geste_invasif_therapeutique",
+    "usc_rea_surveillance_programmee",
+    "usc_rea_non_programmee_pour_complication",
+    "defaillance_organe",
+    "deces_lie_complication",
+]
+
+CONTEXT_TEMPLATE = """
+CONTEXTE CHIRURGICAL ET TEMPOREL
+
+- Date de la chirurgie index : {date_chirurgie}
+- Acte de chirurgie index : {surgery_label}
+- Date du compte-rendu à classer : {date_cr}
+
+"""
+
+DIRECT_PROMPT_TEMPLATE = CONTEXT_TEMPLATE + """
+TÂCHE
+
+Attribue le grade de Clavien-Dindo le plus élevé pour une NOUVELLE complication postopératoire décrite dans ce compte-rendu.
+
+RÈGLES DE DÉCISION
+
+- Grade 1 : aucune nouvelle complication postopératoire pertinente, ou complication ne nécessitant aucun traitement spécifique autre qu'une surveillance simple ou un traitement mineur non spécifique
+- Grade 2 : complication nécessitant un traitement pharmacologique spécifique
+- Grade 3 : complication nécessitant un geste thérapeutique invasif chirurgical, endoscopique ou radiologique sous anesthésie locale ou générale
+- Grade 4 : complication mettant en jeu le pronostic vital avec admission non programmée en USC/réanimation pour la complication ET défaillance d'au moins un organe
+- Grade 5 : décès lié à une complication postopératoire
+
+CONTRAINTES
+
+- Ne prends en compte que les événements NOUVEAUX survenus pendant l'hospitalisation actuelle ou depuis la dernière sortie, dans les 90 jours postopératoires
+- Ignore les antécédents, les complications anciennes rappelées à titre historique, la chirurgie index elle-même et les traitements chroniques
+- Une USC ou une réanimation programmée pour surveillance postopératoire immédiate ne suffit pas pour un grade 4
+- Si plusieurs complications sont présentes, retiens le grade le plus élevé
+- En cas de doute temporel, ne retiens pas l'événement
+- Si aucune nouvelle complication postopératoire pertinente n'est décrite, réponds 1
+
+COMPTE-RENDU CLINIQUE
+
+{cr_text}
+
+RÉPONSE
+
+Donne STRICTEMENT un seul chiffre : 1, 2, 3, 4 ou 5
+"""
+
+TWO_STEP_PROMPT_TEMPLATE = CONTEXT_TEMPLATE + """
+TÂCHE
+
+Extrais la présence des signaux utiles au classement de Clavien-Dindo pour une NOUVELLE complication postopératoire.
+
+DÉFINITIONS DES CHAMPS
+
+- complication_nouvelle : oui s'il existe au moins une nouvelle complication postopératoire
+- evenement_temporel_pertinent : oui seulement si l'événement est survenu pendant l'hospitalisation actuelle ou depuis la dernière sortie
+- traitement_pharmacologique_specifique : oui si la complication nécessite un traitement pharmacologique spécifique
+- geste_invasif_therapeutique : oui si la complication nécessite un geste thérapeutique chirurgical, endoscopique ou radiologique
+- usc_rea_surveillance_programmee : oui si le séjour en USC/réanimation correspond à une surveillance postopératoire programmée sans nouvelle complication grave
+- usc_rea_non_programmee_pour_complication : oui si la complication motive une admission, réadmission ou prolongation non programmée du séjour en USC/réanimation
+- defaillance_organe : oui s'il existe une défaillance respiratoire, hémodynamique, rénale, neurologique ou une autre défaillance viscérale mettant en jeu le pronostic vital
+- deces_lie_complication : oui si le patient décède d'une complication postopératoire
+
+RÈGLES
+
+- Ne prends en compte que les événements NOUVEAUX survenus pendant l'hospitalisation actuelle ou depuis la dernière sortie
+- Ignore les antécédents, les complications anciennes rappelées à titre historique, la chirurgie index elle-même et les traitements chroniques
+- Si le séjour en USC/réanimation est uniquement programmé pour surveillance postopératoire immédiate, mets usc_rea_surveillance_programmee à oui et usc_rea_non_programmee_pour_complication à non
+- Le grade 4 suppose simultanément une nouvelle complication pertinente sur le plan temporel, une admission ou un séjour non programmé en USC/réanimation pour la complication, et une défaillance d'organe
+- En cas de doute temporel, mets evenement_temporel_pertinent à non
+- Réponds uniquement par un objet JSON conforme au schéma
+
+COMPTE-RENDU CLINIQUE
+
+{cr_text}
+"""

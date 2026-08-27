@@ -287,9 +287,9 @@ def run(text_col, tag):
         patient = (
             report.groupby("patient_id", as_index=False)
             .agg(
-                cd_true_max=("cd_manuel", "max"),
-                cd_pred_max=("cd_pred", "max"),
-            )
+            cd_manuel=("cd_manuel", "max"),
+            cd_pred=("cd_pred", "max"),
+        )
         )
 
         patient.to_csv(
@@ -298,17 +298,17 @@ def run(text_col, tag):
         )
 
         patient_metrics = scores(
-            patient["cd_true_max"],
-            patient["cd_pred_max"],
+            patient["cd_manuel"],
+            patient["cd_pred"],
         )
         patient_metrics["confusion_matrix"] = confusion_matrix(
-            patient["cd_true_max"],
-            patient["cd_pred_max"],
+            patient["cd_manuel"],
+            patient["cd_pred"],
             labels=LABELS,
         ).tolist()
         patient_metrics["classification_report"] = classification_report(
-            patient["cd_true_max"],
-            patient["cd_pred_max"],
+            patient["cd_manuel"],
+            patient["cd_pred"],
             labels=LABELS,
             target_names=LABEL_NAMES,
             output_dict=True,
@@ -322,8 +322,8 @@ def run(text_col, tag):
             "val_patient_level": patient_metrics,
             "bootstrap_val_cr_level": bootstrap(y_val, pred),
             "bootstrap_val_patient_level": bootstrap(
-                patient["cd_true_max"],
-                patient["cd_pred_max"],
+                patient["cd_manuel"],
+                patient["cd_pred"],
             ),
         }
 

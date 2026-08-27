@@ -35,7 +35,7 @@ EXTERNAL_TEST = DATA_DIR / "lora_val_cd1to5.csv"
 
 MODEL_ID = os.environ.get(
     "MODEL_ID",
-    "mistralai/Ministral-3-3B-Instruct-2512-BF16",
+    "mistralai/Mistral-Small-3.2-24B-Instruct-2506",
 )
 
 LABELS = [1, 2, 3, 4, 5]
@@ -137,35 +137,29 @@ def bootstrap(y_true, y_pred, n_bootstrap, seed):
     }
 
 
-def load_model(adapter_dir, quant_mode, token):
+def load_model(adapter_dir, token):
     source = os.environ.get("MODEL_PATH", "").strip() or MODEL_ID
-    common = {
-        "token": token,
-        "device_map": "auto",
-        "attn_implementation": "eager",
-    }
+    quantization = BitsAndBytesConfig(
+        load_in_4bit=True,
+        bnb_4bit_quant_type="nf4",
+        bnb_4bit_compute_dtype=torch.bfloat16,
+        bnb_4bit_use_double_quant=True,
+    )
 
-    if quant_mode == "nf4":
-        quantization = BitsAndBytesConfig(
-            load_in_4bit=True,
-            bnb_4bit_quant_type="nf4",
-            bnb_4bit_compute_dtype=torch.bfloat16,
-            bnb_4bit_use_double_quant=True,
-        )
-        model = Mistral3ForConditionalGeneration.from_pretrained(
-            source,
-            quantization_config=quantization,
-            **common,
-        )
-    else:
-        model = Mistral3ForConditionalGeneration.from_pretrained(
-            source,
-            dtype=torch.bfloat16,
-            **common,
-        )
+    model = Mistral3ForConditionalGeneration.from_pretrained(
+        source,
+        token=token,
+        quantization_config=quantization,
+        device_map="auto",
+        attn_implementation="eager",
+    )
 
     model = PeftModel.from_pretrained(model, adapter_dir)
     model.eval()
+    model.config.use_cache = True
+
+    if hasattr(model.config, "text_config"):
+        model.config.text_config.use_cache = True
 
     return model
 
@@ -184,6 +178,7 @@ def run(args):
 
     test_path = Path(args.external_test_csv or EXTERNAL_TEST)
     train_path = Path(args.full_train_csv or FULL_TRAIN)
+    adapter_dir = Path(args.adapter_dir)
 
     test = pd.read_csv(test_path, low_memory=False)
     train = pd.read_csv(train_path, usecols=["patient_id"], low_memory=False)
@@ -192,6 +187,12 @@ def run(args):
     train["patient_id"] = train["patient_id"].fillna("").astype(str).str.strip()
 
     assert not set(test["patient_id"]) & set(train["patient_id"])
+
+    meta_path = adapter_dir.parent / "training_meta.json"
+
+    if meta_path.exists():
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        assert meta.get("training_role") == "final_refit"
 
     text_col = "cr_text_cleaned" if args.text_mode == "cleaned" else "cr_text_brut"
     required = {
@@ -211,7 +212,7 @@ def run(args):
     test = test[test["cd_manuel"].between(1, 5)].copy()
     test["cd_manuel"] = test["cd_manuel"].astype(int)
 
-    model = load_model(args.adapter_dir, args.quant_mode, token)
+    model = load_model(adapter_dir, token)
     template = TWO_STEP_PROMPT_TEMPLATE if args.target_mode == "twostep" else DIRECT_PROMPT_TEMPLATE
 
     valid_outputs = (
@@ -228,7 +229,7 @@ def run(args):
 
     tracker = OfflineEmissionsTracker(
         project_name="THANATOS",
-        experiment_id=f"ministral3b_{args.quant_mode}_{args.text_mode}_{args.target_mode}_evaluation",
+        experiment_id=f"mistral24b_qlora_{args.text_mode}_{args.target_mode}_evaluation",
         output_dir=str(output_dir),
         output_file="emissions.csv",
         log_level="critical",
@@ -241,7 +242,7 @@ def run(args):
     rows = []
 
     for _, row in test.iterrows():
-        row_data = {
+        context = {
             "date_chirurgie": str(row["date_chirurgie"]),
             "surgery_label": str(row["major_surgery_label"]),
             "date_cr": str(row["date_cr"]),
@@ -258,7 +259,7 @@ def run(args):
 
         for sentence in sentences:
             candidate = " ".join(current + [sentence]).strip()
-            prompt = template.format(cr_text=candidate, **row_data)
+            prompt = template.format(cr_text=candidate, **context)
 
             if len(encode(tokenizer, prompt)) <= args.max_input_tokens:
                 current.append(sentence)
@@ -278,14 +279,13 @@ def run(args):
         chunk_results = []
 
         for chunk in chunks:
-            prompt = template.format(cr_text=chunk, **row_data)
+            prompt = template.format(cr_text=chunk, **context)
             prompt_ids = encode(tokenizer, prompt)
             candidates = {}
 
             for text in valid_outputs:
                 full_ids = encode(tokenizer, prompt, text, eos_id)
-                suffix = tuple(full_ids[len(prompt_ids):])
-                candidates[suffix] = text
+                candidates[tuple(full_ids[len(prompt_ids):])] = text
 
             trie = {}
 
@@ -315,12 +315,10 @@ def run(args):
                 ),
             }
 
-            max_new_tokens = max(len(x) for x in candidates) + 1
-
             with torch.no_grad():
                 generated_ids = model.generate(
                     **inputs,
-                    max_new_tokens=max_new_tokens,
+                    max_new_tokens=max(len(x) for x in candidates) + 1,
                     do_sample=False,
                     temperature=None,
                     top_p=None,
@@ -354,8 +352,8 @@ def run(args):
 
         selected = max(chunk_results, key=lambda x: x["grade"])
         output = row.to_dict()
-        output["gold"] = int(row["cd_manuel"])
-        output["pred"] = int(selected["grade"])
+        output["cd_manuel"] = int(row["cd_manuel"])
+        output["cd_pred"] = int(selected["grade"])
         output["n_chunks"] = len(chunk_results)
         output["llm_output"] = selected["output"]
 
@@ -370,15 +368,15 @@ def run(args):
     report = pd.DataFrame(rows)
     report.to_csv(output_dir / "val_predictions_cr_level.csv", index=False)
 
-    report_metrics = scores(report["gold"], report["pred"])
+    report_metrics = scores(report["cd_manuel"], report["cd_pred"])
     report_metrics["confusion_matrix"] = confusion_matrix(
-        report["gold"],
-        report["pred"],
+        report["cd_manuel"],
+        report["cd_pred"],
         labels=LABELS,
     ).tolist()
     report_metrics["classification_report"] = classification_report(
-        report["gold"],
-        report["pred"],
+        report["cd_manuel"],
+        report["cd_pred"],
         labels=LABELS,
         target_names=["CD-I", "CD-II", "CD-III", "CD-IV", "CD-V"],
         output_dict=True,
@@ -388,22 +386,22 @@ def run(args):
     patient = (
         report.groupby("patient_id", as_index=False)
         .agg(
-            gold=("gold", "max"),
-            pred=("pred", "max"),
+            cd_manuel=("cd_manuel", "max"),
+            cd_pred=("cd_pred", "max"),
         )
     )
 
     patient.to_csv(output_dir / "val_predictions_patient_level.csv", index=False)
 
-    patient_metrics = scores(patient["gold"], patient["pred"])
+    patient_metrics = scores(patient["cd_manuel"], patient["cd_pred"])
     patient_metrics["confusion_matrix"] = confusion_matrix(
-        patient["gold"],
-        patient["pred"],
+        patient["cd_manuel"],
+        patient["cd_pred"],
         labels=LABELS,
     ).tolist()
     patient_metrics["classification_report"] = classification_report(
-        patient["gold"],
-        patient["pred"],
+        patient["cd_manuel"],
+        patient["cd_pred"],
         labels=LABELS,
         target_names=["CD-I", "CD-II", "CD-III", "CD-IV", "CD-V"],
         output_dict=True,
@@ -411,15 +409,15 @@ def run(args):
     )
 
     bootstrap_report = bootstrap(
-        report["gold"],
-        report["pred"],
+        report["cd_manuel"],
+        report["cd_pred"],
         args.n_bootstrap_val,
         args.seed,
     )
 
     bootstrap_patient = bootstrap(
-        patient["gold"],
-        patient["pred"],
+        patient["cd_manuel"],
+        patient["cd_pred"],
         args.n_bootstrap_val,
         args.seed,
     )
@@ -446,8 +444,8 @@ def run(args):
 
     summary = {
         "model_id": MODEL_ID,
-        "adapter_dir": str(Path(args.adapter_dir).resolve()),
-        "quant_mode": args.quant_mode,
+        "method": "qlora",
+        "adapter_dir": str(adapter_dir.resolve()),
         "text_mode": args.text_mode,
         "target_mode": args.target_mode,
         "seed": args.seed,
@@ -476,7 +474,6 @@ parser.add_argument("--results-dir", required=True)
 parser.add_argument("--adapter-dir", required=True)
 parser.add_argument("--text-mode", choices=["raw", "cleaned"], required=True)
 parser.add_argument("--target-mode", choices=["direct", "twostep"], required=True)
-parser.add_argument("--quant-mode", choices=["nf4", "bf16"], default="nf4")
 parser.add_argument("--max-input-tokens", type=int, default=5800)
 parser.add_argument("--n-bootstrap-val", type=int, default=1000)
 parser.add_argument("--seed", type=int, default=42)

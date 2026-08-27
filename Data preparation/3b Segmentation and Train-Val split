@@ -30,8 +30,6 @@ TRAIN_FRAC = 0.7
 RANDOM_STATE = 42
 TARGET_CLASSES = (3, 4, 5)
 
-ANNOTATEUR_PRIORITAIRE = "CRE"
-
 DOCS_A_EXCLURE = [
     "HDJ", "Lettre_de_sortie", "Courrier_sortie", "Cr_de_sortie",
     "LETTRE_DE_SORTIE", "Courrier_de_sortie", "Synthese_autre",
@@ -823,45 +821,6 @@ def add_ccam_code(df, correspondance_path):
     return merged
 
 
-def deduplicate(df):
-    df = df.copy()
-    df["date_chirurgie"] = pd.to_datetime(df["date_chirurgie"], errors="coerce")
-
-    rows_to_drop = []
-
-    for (pid, date_chir), group in df.groupby(["patient_id", "date_chirurgie"]):
-        sources = list(group["source"].unique())
-
-        if len(sources) < 2:
-            continue
-
-        disagreement = False
-
-        for fichier in group["fichier_cr"].unique():
-            block = group[group["fichier_cr"] == fichier]
-
-            if len(block) > 1:
-                grades = block.groupby("source")["cd_manuel"].first().to_dict()
-
-                if len(set(grades.values())) > 1:
-                    disagreement = True
-
-        if disagreement and ANNOTATEUR_PRIORITAIRE in sources:
-            keep = ANNOTATEUR_PRIORITAIRE
-        else:
-            keep = sorted(sources)[0]
-
-        mask = (
-            (df["patient_id"] == pid)
-            & (df["date_chirurgie"] == date_chir)
-            & (df["source"] != keep)
-        )
-
-        rows_to_drop.extend(df[mask].index.tolist())
-
-    return df.drop(index=rows_to_drop)
-
-
 segmented_df = apply_segmentation(reports_df)
 
 filtered_df = filter_strict(segmented_df, max_cd=5)
@@ -877,6 +836,5 @@ OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 for name, split_df in [("train", train_df), ("val", val_df)]:
     split_df = add_ccam_code(split_df, CORRESPONDANCE_PATH)
-    split_df = deduplicate(split_df)
 
     split_df.to_csv(OUTPUT_DIR / f"{name}_cd1to5.csv", index=False)

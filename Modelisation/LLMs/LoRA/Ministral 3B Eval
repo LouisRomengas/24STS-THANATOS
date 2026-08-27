@@ -354,8 +354,8 @@ def run(args):
 
         selected = max(chunk_results, key=lambda x: x["grade"])
         output = row.to_dict()
-        output["gold"] = int(row["cd_manuel"])
-        output["pred"] = int(selected["grade"])
+        output["cd_manuel"] = int(row["cd_manuel"])
+        output["cd_pred"] = int(selected["grade"])
         output["n_chunks"] = len(chunk_results)
         output["llm_output"] = selected["output"]
 
@@ -370,15 +370,15 @@ def run(args):
     report = pd.DataFrame(rows)
     report.to_csv(output_dir / "val_predictions_cr_level.csv", index=False)
 
-    report_metrics = scores(report["gold"], report["pred"])
+    report_metrics = scores(report["cd_manuel"], report["cd_pred"])
     report_metrics["confusion_matrix"] = confusion_matrix(
-        report["gold"],
-        report["pred"],
+        report["cd_manuel"],
+        report["cd_pred"],
         labels=LABELS,
     ).tolist()
     report_metrics["classification_report"] = classification_report(
-        report["gold"],
-        report["pred"],
+        report["cd_manuel"],
+        report["cd_pred"],
         labels=LABELS,
         target_names=["CD-I", "CD-II", "CD-III", "CD-IV", "CD-V"],
         output_dict=True,
@@ -388,22 +388,22 @@ def run(args):
     patient = (
         report.groupby("patient_id", as_index=False)
         .agg(
-            gold=("gold", "max"),
-            pred=("pred", "max"),
+            cd_manuel=("cd_manuel", "max"),
+            cd_pred=("cd_pred", "max"),
         )
     )
 
     patient.to_csv(output_dir / "val_predictions_patient_level.csv", index=False)
 
-    patient_metrics = scores(patient["gold"], patient["pred"])
+    patient_metrics = scores(patient["cd_manuel"], patient["cd_pred"])
     patient_metrics["confusion_matrix"] = confusion_matrix(
-        patient["gold"],
-        patient["pred"],
+        patient["cd_manuel"],
+        patient["cd_pred"],
         labels=LABELS,
     ).tolist()
     patient_metrics["classification_report"] = classification_report(
-        patient["gold"],
-        patient["pred"],
+        patient["cd_manuel"],
+        patient["cd_pred"],
         labels=LABELS,
         target_names=["CD-I", "CD-II", "CD-III", "CD-IV", "CD-V"],
         output_dict=True,
@@ -411,15 +411,15 @@ def run(args):
     )
 
     bootstrap_report = bootstrap(
-        report["gold"],
-        report["pred"],
+        report["cd_manuel"],
+        report["cd_pred"],
         args.n_bootstrap_val,
         args.seed,
     )
 
     bootstrap_patient = bootstrap(
-        patient["gold"],
-        patient["pred"],
+        patient["cd_manuel"],
+        patient["cd_pred"],
         args.n_bootstrap_val,
         args.seed,
     )

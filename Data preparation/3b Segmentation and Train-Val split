@@ -1,0 +1,882 @@
+import json
+import re
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+
+import edsnlp
+import edsnlp.pipes as eds
+
+SECTION_NLP = edsnlp.blank("eds")
+SECTION_NLP.add_pipe(eds.normalizer())
+SECTION_NLP.add_pipe(eds.sentences())
+SECTION_NLP.add_pipe(eds.sections())
+
+SENT_NLP = edsnlp.blank("eds")
+SENT_NLP.add_pipe(eds.normalizer())
+SENT_NLP.add_pipe(eds.sentences())
+
+CORRESPONDANCE_PATH = Path(
+    "/export/home/cse240018/24STS-THANATOS_LRS/24STS-THANATOS_datasets"
+    "/correspondance_ids_20250605_121018.csv"
+)
+
+OUTPUT_DIR = Path(
+    "/export/home/cse240018/24STS-THANATOS_LRS/24STS-THANATOS_datasets/FINAL"
+)
+
+TRAIN_FRAC = 0.7
+RANDOM_STATE = 42
+TARGET_CLASSES = (3, 4, 5)
+
+ANNOTATEUR_PRIORITAIRE = "CRE"
+
+DOCS_A_EXCLURE = [
+    "HDJ", "Lettre_de_sortie", "Courrier_sortie", "Cr_de_sortie",
+    "LETTRE_DE_SORTIE", "Courrier_de_sortie", "Synthese_autre",
+    "Document_administratif",
+]
+
+EDSNLP_CATEGORY = {
+    "evolution": "postop",
+    "conclusion": "postop",
+    "actes": "postop",
+    "prescriptions": "prescription_sortie",
+    "traitements sortie": "prescription_sortie",
+    "examens": "neutral",
+    "examens complémentaires": "neutral",
+    "diagnostic": "neutral",
+    "modalites sortie": "neutral",
+    "antécédents": "preop",
+    "antecedents": "preop",
+    "antécédents familiaux": "preop",
+    "histoire de la maladie": "preop",
+    "motif": "preop",
+    "allergies": "preop",
+    "habitus": "preop",
+    "traitements entrée": "preop",
+    "correspondants": "preop",
+    "facteurs de risques": "preop",
+    "données biométriques entrée": "preop",
+    "conclusion entrée": "preop",
+    "introduction": "preop",
+    "vaccinations": "preop",
+}
+
+SECTION_TITLES = {
+    "postop": [
+        r"^\s*[ÉE]VOLUTION\s*:?\s*$",
+        r"^\s*[ÉE]VOLUTION\s+DANS\s+LE\s+SERVICE\b.*$",
+        r"^\s*[\-\*]\s*[ÉE]VOLUTION\s*:?\s*$",
+        r"^\s*SUITES?\s+OP[ÉE]RATOIRES?\s*:?\s*$",
+        r"^\s*AU\s+TOTAL\s*:?\s*$",
+        r"^\s*OBSERVATIONS?\s+M[ÉE]DICALES?\s*:?\s*$",
+        r"^\s*CONCLUSION\s*:?\s*$",
+        r"^\s*ACTES?\s*:?\s*$",
+    ],
+    "prescription_sortie": [
+        r"^\s*PRESCRIPTION\s+DE\s+SORTIE\s*:?\s*$",
+        r"^\s*TRAITEMENT\s+DE\s+SORTIE\s*:?\s*$",
+    ],
+    "neutral": [
+        r"^\s*EXAMENS?\s+COMPL[ÉE]MENTAIRES?.*:?\s*$",
+        r"^\s*BIOLOGIE\s*:?\s*$",
+        r"^\s*IMAGERIE\s*:?\s*$",
+        r"^\s*ECG\s*:?\s*$",
+        r"^\s*DIAGNOSTIC\s*:?\s*$",
+        r"^\s*MODALIT[ÉE]S?\s+DE\s+SORTIE\s*:?\s*$",
+    ],
+    "preop": [
+        r"^\s*ANT[ÉE]C[ÉE]DENTS?.*",
+        r"^\s*MODE\s+DE\s+VIE\s*:?\s*$",
+        r"^\s*ALLERGIES?\s*:?\s*$",
+        r"^\s*TRAITEMENT\s+[AÀ]\s+L'ENTR[ÉE]E\s*:?\s*$",
+        r"^\s*TRAITEMENT\s+HABITUEL\s*:?\s*$",
+        r"^\s*HISTOIRE\s+DE\s+LA\s+MALADIE\s*:?\s*$",
+        r"^\s*R[ÉE]SUM[ÉE]\s+CLINIQUE.*:?\s*$",
+        r"^\s*EXAMEN\s+CLINIQUE.*:?\s*$",
+        r"^\s*MOTIF.*:?\s*$",
+        r"^\s*INTERVENTION.*:?\s*$",
+    ],
+    "admin": [
+        r"^\s*M[ÉE]DICAMENTS?\s*:?\s*$",
+        r"^\s*SOINS\s+INFIRMIERS?\s*:?\s*$",
+        r"^\s*SOINS\s+DE\s+R[ÉE][ÉE]DUCATION\s*:?\s*$",
+        r"^\s*EXAMENS?\s+DE\s+BIOLOGIE\s*:?\s*$",
+        r"^\s*EXAMENS?\s+D'IMAGERIE\s*:?\s*$",
+        r"^\s*PLANIFICATION\s+DES\s+SOINS.*:?\s*$",
+        r"^\s*EV[ÉE]NEMENTS?\s+RECENS[ÉE]S.*:?\s*$",
+        r"^\s*RENDEZ-VOUS.*:?\s*$",
+    ],
+}
+
+NEUTRAL_CATEGORIES = {"neutral", "prescription_sortie"}
+
+KEYWORD_TRIGGERS = [
+    r"(?i)(suites?\s+op[ée]ratoires?\s+(?:simples?|marqu[ée]es?\s+par|favorables?))",
+    r"(?i)(l['']?[ée]volution\s+(?:a\s+[ée]t[ée]\s+)?(?:simple|favorable|marqu[ée]e))",
+    r"(?i)(au\s+total\s*[:\n])",
+    r"(?i)(en\s+post[- ]?op[ée]ratoire)",
+]
+
+DOCUMENT_HEADER_PATTERNS = [
+    re.compile(r"^\s*COMPTE[- ]?RENDU\s+D'HOSPITALISATION", re.IGNORECASE),
+    re.compile(r"^\s*S[ée]jour\s+du\s+\d{2}/\d{2}/\d{4}", re.IGNORECASE),
+    re.compile(r"^\s*[A-Z\-]+\s+CEDEX,?\s+le\s+\d{2}/\d{2}/\d{4}", re.IGNORECASE),
+    re.compile(r"^\s*(?:Monsieur|Madame|M\.|Mme)\s+[A-Z]", re.IGNORECASE),
+    re.compile(r"^\s*n[ée]\(?e?\)?\s+le\s+\d{2}/\d{2}/\d{4}", re.IGNORECASE),
+]
+
+SEG_HEADER_BLOCK_RX = re.compile(
+    r"^ID\s+PATIENT\s+ORIGINAL:.*?^=+\s*$",
+    re.MULTILINE | re.DOTALL
+)
+
+HEADER_LINE_RX = re.compile(
+    r"^\s*(ID PATIENT ORIGINAL:|DATE DE CHIRURGIE:|TYPE DE CHIRURGIE:|"
+    r"ANNOTATEUR ASSIGN[ÉE]:|NOUVEAU LOT:|USAGE:|DATE DU RAPPORT:|"
+    r"TITRE DU RAPPORT:|TYPE DU RAPPORT:|CLASS[ÉE] DANS:)",
+    re.IGNORECASE
+)
+
+DOC_IMPOR_RX = re.compile(r"TYPE\s+DU\s+RAPPORT\s*:\s*DOC-IMPOR", re.IGNORECASE)
+
+SEPARATOR_RX = re.compile(r'^[ \t]*[=\-_*·]{3,}[ \t]*$')
+
+ADMIN_LINE_PATTERNS = [
+    re.compile(r"^\s*L['’]AP-HP\s+collecte\s+vos\s+donn[ée]es.*", re.IGNORECASE),
+    re.compile(r"^\d+/\d+CRH.*", re.IGNORECASE),
+    re.compile(r"^Pat\.:\s*.*\|.*\|.*", re.IGNORECASE),
+    re.compile(r"^\s*Pat\.\s*:.*", re.IGNORECASE),
+    re.compile(r"^Courrier\s+(?:non\s+)?valid[ée].*", re.IGNORECASE),
+    re.compile(r"^Le\s+document\s+a\s+[ée]t[ée]\s+remis.*", re.IGNORECASE),
+    re.compile(r"^\s*https?://.*", re.IGNORECASE),
+    re.compile(r"^.*aphp\.fr.*", re.IGNORECASE),
+    re.compile(r"^.*opposition.*[ée]lectronique.*", re.IGNORECASE),
+    re.compile(r"^.*politique\s+de\s+confidentialit[ée].*", re.IGNORECASE),
+    re.compile(r"^Pour\s+en\s+savoir\s+plus\s+sur\s+les\s+conditions.*", re.IGNORECASE),
+    re.compile(r"^pouvez\s+vous\s+opposer.*", re.IGNORECASE),
+    re.compile(r"^traitement\s+adapt[ée].*", re.IGNORECASE),
+    re.compile(r"^.*Imprim[ée]\s+le.*", re.IGNORECASE),
+    re.compile(r"^.*Page\s+\d+\s*/?\s*\d*.*", re.IGNORECASE),
+    re.compile(r"^\s*Termin[ée]\s*$", re.IGNORECASE),
+    re.compile(r"^\s*EDOK-\d+-\d+\s*$", re.IGNORECASE),
+]
+
+LETTERHEAD_PATTERNS = [
+    re.compile(r"^HOPITAL\s+[A-Z\s]+$", re.IGNORECASE),
+    re.compile(r"^SERVICE\s+DE\s+.*", re.IGNORECASE),
+    re.compile(r"^ASSISTANCE\s+PUBLIQUE.*", re.IGNORECASE),
+    re.compile(r"^GROUPE\s+HOSPITALIER.*", re.IGNORECASE),
+    re.compile(r"^Chef\s+de\s+Service.*", re.IGNORECASE),
+    re.compile(r"^Secr[ée]tariat\s*:.*", re.IGNORECASE),
+    re.compile(r"^\s*Fax\s*:.*", re.IGNORECASE),
+    re.compile(r"^\s*T[ée]l\.?\s*:.*", re.IGNORECASE),
+    re.compile(r"^\s*Tel\s*:.*", re.IGNORECASE),
+    re.compile(r"^\s*E-?mail\s*:.*", re.IGNORECASE),
+    re.compile(r"^\s*FINESS\s*:.*", re.IGNORECASE),
+    re.compile(r"^\s*DMU\s+.*", re.IGNORECASE),
+    re.compile(r"^Pr\.\s+[A-Z]\..*(?:PU-PH|PH).*", re.IGNORECASE),
+    re.compile(r"^Dr\.\s+[A-Z]\..*(?:PU-PH|PH).*", re.IGNORECASE),
+    re.compile(r"^Chefs?\s+de\s+[Cc]linique.*", re.IGNORECASE),
+    re.compile(r"^Cadres?\s+(?:de\s+Soins|Infirmiers?).*", re.IGNORECASE),
+    re.compile(r"^Assistante?\s+[Ss]ociale.*", re.IGNORECASE),
+    re.compile(r"^\s*Psychologue\s*:.*", re.IGNORECASE),
+    re.compile(r"^\s*Stomath[ée]rapeutes?\s*:.*", re.IGNORECASE),
+    re.compile(r"^Accueil\s*$", re.IGNORECASE),
+    re.compile(r"^Consultation\s*$", re.IGNORECASE),
+    re.compile(r"^R[ée]animation\s*$", re.IGNORECASE),
+    re.compile(r"^Di[ée]t[ée]ticienne\s*$", re.IGNORECASE),
+    re.compile(r"^Standard\s*:.*", re.IGNORECASE),
+    re.compile(r"^\d+,?\s*(?:boulevard|rue|avenue|place)\s+.*", re.IGNORECASE),
+    re.compile(r"^\d{5}\s+[A-Z]+.*", re.IGNORECASE),
+    re.compile(r"^.*CEDEX\s+\d+.*$", re.IGNORECASE),
+    re.compile(r"^Mme\s+[a-z]+\s+[A-Z]+.*", re.IGNORECASE),
+]
+
+DOCTOR_LINE_PATTERNS = [
+    re.compile(r"^\s*(?:Dr|Docteur|Pr|Professeur)\b.*$", re.IGNORECASE),
+    re.compile(r"^[A-Z]\.\s+[A-Z][A-Za-zÀ-ÿ\-]+(?:\s+[A-Z]\.\s+[A-Z][A-Za-zÀ-ÿ\-]+)?$"),
+]
+
+BIO_TABLE_LINE_RX = re.compile(r"^.*¦.*$")
+BIO_TABLE_SEPARATOR_RX = re.compile(r"^_+$")
+BIO_ORPHAN_LINE_RX = re.compile(r"^\s*[¹²³⁴⁵⁶⁷⁸⁹]?\d?\s*$")
+
+CHECKLIST_RX = re.compile(
+    r"^\s*-\s*(?:Information|Administration|Porteur|Inclusion|Dispositif|"
+    r"Conseils|Survenue).*$",
+    re.IGNORECASE
+)
+
+RDV_LINE_RX = re.compile(r"^\s*-?\s*\d{2}/\d{2}/\d{4}\s+[àa]\s+\d{2}:\d{2}.*$")
+
+DROP_LINE_PATTERNS = (
+    ADMIN_LINE_PATTERNS + LETTERHEAD_PATTERNS + DOCTOR_LINE_PATTERNS
+    + [HEADER_LINE_RX, SEPARATOR_RX, BIO_TABLE_LINE_RX,
+       BIO_TABLE_SEPARATOR_RX, BIO_ORPHAN_LINE_RX, CHECKLIST_RX, RDV_LINE_RX]
+)
+
+ADDRESS_LIKE_RX = re.compile(
+    r"(?i)^(monsieur|madame|mlle|mr)\b|"
+    r"\d{2,}\s*[A-Z]{2,}|"
+    r"[A-Z]{3,}\d{2,}|"
+    r"\b(?:rue|avenue|boulevard|impasse|place)\b",
+    re.IGNORECASE,
+)
+
+BIO_ANALYTE_RX = re.compile(
+    r'^\s*(?:Hb|Leucocytes|PNN|Plaquettes|Créatinine|Clairance|'
+    r'ASAT|ALAT|GGT|PAL|Bilirubine|Albumine|CRP|Ionogramme|'
+    r'Calcémie|Magnésémie|ACE|CA\s*19|Marqueurs)\s*[:(¦|]',
+    re.IGNORECASE
+)
+
+MED_LIST_HEADER_RX = re.compile(
+    r'^\s*(?:Médicaments?|Ordonnance|Prescription|Traitement)\s*:?\s*$',
+    re.IGNORECASE
+)
+
+PURE_MED_LINE_RX = re.compile(
+    r'^\s*[-•*]?\s*(?:[A-Z][A-Za-z]+(?:\s+\d+\s*(?:mg|g|ml|ui|µg|cp|gel|amp|sachet))?'
+    r'(?:\s*[:,]\s*\d+\s*(?:fois|x|/)\s*(?:jour|j|24h?|matin|soir|midi))?)\s*$',
+    re.IGNORECASE
+)
+
+
+def normalize_whitespace(text):
+    text = re.sub(r'[ \t]+', ' ', text)
+    text = re.sub(r'\n{3,}', '\n\n', text)
+
+    return "\n".join(line.rstrip() for line in text.splitlines()).strip()
+
+
+def is_address_line(line):
+    s = line.strip()
+
+    if not s:
+        return False
+
+    letters = [c for c in s if c.isalpha()]
+    ratio = sum(c.isupper() for c in letters) / len(letters) if letters else 0.0
+
+    return ratio > 0.6 or bool(ADDRESS_LIKE_RX.search(s))
+
+
+def drop_address_blocks(text):
+    lines = text.splitlines()
+    kept = []
+    i = 0
+
+    while i < len(lines):
+        block = lines[i:i + 3]
+
+        if len(block) >= 2 and all(is_address_line(l) for l in block):
+            i += len(block)
+            continue
+
+        if is_address_line(lines[i]) and (i == 0 or not lines[i - 1].strip()):
+            i += 1
+            continue
+
+        kept.append(lines[i])
+        i += 1
+
+    return "\n".join(kept)
+
+
+def drop_noise_lines(text):
+    text = "\n".join(
+        line for line in text.splitlines()
+        if not any(pattern.match(line) for pattern in DROP_LINE_PATTERNS)
+    )
+
+    return drop_address_blocks(text)
+
+
+def remove_bio_tables(text):
+    lines = []
+    in_table = False
+
+    for line in text.splitlines():
+        if BIO_ANALYTE_RX.match(line):
+            in_table = True
+            continue
+
+        if in_table:
+            if not line.strip() or re.match(r'^[A-Z][A-Za-zÀ-ÿ\s]+\s*:', line):
+                in_table = False
+            elif re.match(r'^\s*[\w\s()°/]+\s*[:(¦|]?\s*[\d.,<>]+', line):
+                continue
+
+        lines.append(line)
+
+    return "\n".join(lines)
+
+
+def remove_pure_med_lists(text):
+    result = []
+    in_list = False
+    buffer = []
+
+    for line in text.splitlines():
+        if MED_LIST_HEADER_RX.match(line):
+            in_list = True
+            buffer = [line]
+            continue
+
+        if in_list:
+            if PURE_MED_LINE_RX.match(line) or not line.strip():
+                buffer.append(line)
+                continue
+
+            has_narrative = any(
+                len(l.split()) > 6 and not PURE_MED_LINE_RX.match(l)
+                for l in buffer if l.strip()
+            )
+
+            if has_narrative:
+                result.extend(buffer)
+
+            in_list = False
+            buffer = []
+
+        result.append(line)
+
+    return "\n".join(result)
+
+
+def starts_with_document_header(content):
+    for line in content.strip().splitlines()[:5]:
+        line = line.strip()
+
+        if not line:
+            continue
+
+        if any(pattern.match(line) for pattern in DOCUMENT_HEADER_PATTERNS):
+            return True
+
+    return False
+
+
+def get_section_category(line):
+    for category, patterns in SECTION_TITLES.items():
+        for pattern in patterns:
+            if re.match(pattern, line, re.IGNORECASE):
+                return category
+
+    return None
+
+
+def is_evolution_title(title):
+    return bool(re.match(
+        r"^\s*[ÉE]VOLUTION(\s+DANS\s+LE\s+SERVICE)?\s*:?\s*$",
+        title, re.IGNORECASE
+    ))
+
+
+def is_observations_medicales_title(title):
+    return bool(re.match(
+        r"^\s*OBSERVATIONS?\s+M[ÉE]DICALES?\s*:?\s*$", title, re.IGNORECASE
+    ))
+
+
+def finalise_section(title, raw_content, category):
+    content = normalize_whitespace(drop_noise_lines(raw_content))
+
+    return {
+        "title": title.strip(),
+        "category": category,
+        "content": content,
+        "content_length": len(content),
+        "is_false_positive": starts_with_document_header(content),
+    }
+
+
+def detect_sections_edsnlp(text):
+    try:
+        spans = SECTION_NLP(text).spans.get("sections", [])
+    except Exception:
+        return []
+
+    sections = []
+
+    for span in spans:
+        category = EDSNLP_CATEGORY.get(getattr(span, "label_", "").lower())
+
+        if category is None:
+            continue
+
+        parts = span.text.split("\n", 1)
+
+        sections.append(
+            finalise_section(
+                parts[0], parts[1] if len(parts) > 1 else "", category
+            )
+        )
+
+    return sections
+
+
+def detect_sections_regex(text):
+    lines = text.splitlines()
+    markers = []
+
+    for i, line in enumerate(lines):
+        category = get_section_category(line)
+
+        if category:
+            markers.append({
+                "title": line.strip(),
+                "category": category,
+                "line_idx": i,
+            })
+
+    sections = []
+
+    for j, marker in enumerate(markers):
+        idx = marker["line_idx"]
+        line = lines[idx]
+        start_line = idx + 1
+        inline_first_line = None
+        title = marker["title"]
+
+        m_inline = re.match(
+            r"^\s*([ÉE]VOLUTION\s+DANS\s+LE\s+SERVICE)\s*:?\s*(.*)$",
+            line, flags=re.IGNORECASE
+        )
+
+        if m_inline:
+            title = m_inline.group(1).strip()
+
+            if m_inline.group(2).strip():
+                inline_first_line = line.strip()
+
+        end_line = (
+            markers[j + 1]["line_idx"] if j + 1 < len(markers) else len(lines)
+        )
+
+        content_lines = lines[start_line:end_line]
+
+        if inline_first_line is not None:
+            content_lines = [inline_first_line] + content_lines
+
+        sections.append(
+            finalise_section(
+                title, "\n".join(content_lines), marker["category"]
+            )
+        )
+
+    return sections
+
+
+def detect_sections(text):
+    sections = detect_sections_edsnlp(text)
+
+    if sections:
+        return sections
+
+    return detect_sections_regex(text)
+
+
+def has_postop_content(sections, min_length=5):
+    return any(
+        sec["category"] == "postop"
+        and sec["content_length"] > min_length
+        and not sec["is_false_positive"]
+        for sec in sections
+    )
+
+
+def get_prescription_sortie_content(sections, min_length=5):
+    for sec in sections:
+        if (
+            sec["category"] == "prescription_sortie"
+            and sec["content_length"] > min_length
+            and not sec["is_false_positive"]
+        ):
+            return sec["content"]
+
+    return None
+
+
+def extract_postop_sections(sections):
+    evolution_present = any(
+        sec["category"] == "postop"
+        and not sec["is_false_positive"]
+        and is_evolution_title(sec["title"])
+        for sec in sections
+    )
+
+    blocks = []
+    seen_postop = False
+
+    for sec in sections:
+        if sec["is_false_positive"] or sec["content_length"] == 0:
+            continue
+
+        if sec["category"] == "postop":
+            if evolution_present and is_observations_medicales_title(sec["title"]):
+                continue
+
+            seen_postop = True
+
+        elif sec["category"] in NEUTRAL_CATEGORIES:
+            if not seen_postop:
+                continue
+
+        else:
+            continue
+
+        title = sec["title"].strip()
+        content = sec["content"]
+
+        if title and not content.upper().startswith(title.upper()):
+            blocks.append(title + "\n" + content if content else title)
+        else:
+            blocks.append(content)
+
+    return "\n\n".join(blocks)
+
+
+def extract_by_keywords(text):
+    earliest = None
+
+    for pattern in KEYWORD_TRIGGERS:
+        for m in re.finditer(pattern, text):
+            if earliest is None or m.start() < earliest:
+                earliest = m.start()
+
+    if earliest is None:
+        return None
+
+    line_start = text.rfind('\n', 0, earliest)
+    line_start = 0 if line_start == -1 else line_start + 1
+
+    return text[line_start:].strip()
+
+
+def segment_sentences(text):
+    if not text:
+        return []
+
+    try:
+        return [
+            {
+                "id": f"S{i}",
+                "start": sent.start_char,
+                "end": sent.end_char,
+                "text": sent.text.strip(),
+            }
+            for i, sent in enumerate(SENT_NLP(text).sents)
+            if sent.text.strip() and len(sent.text.strip()) > 2
+        ]
+    except Exception:
+        pass
+
+    sentences = []
+    pos = 0
+
+    for i, part in enumerate(
+        re.split(r'(?<=[\.\!\?;])\s+(?=[A-ZÉÈÊÂÀÔÎÙÛÇ0-9\-])', text)
+    ):
+        part = part.strip()
+
+        if part and len(part) > 2:
+            sentences.append({
+                "id": f"S{i}",
+                "start": pos,
+                "end": pos + len(part),
+                "text": part,
+            })
+
+        pos += len(part) + 1
+
+    return sentences
+
+
+def segment_cr_with_metadata(text):
+    empty = {
+        "cr_text_cleaned": "",
+        "sentences_json": "[]",
+        "original_length": len(text) if isinstance(text, str) else 0,
+        "cleaned_length": 0,
+        "reduction_percent": 100.0,
+    }
+
+    if not isinstance(text, str) or not text:
+        return dict(empty, segmentation_method="empty_input",
+                    reduction_percent=0.0)
+
+    original_length = len(text)
+
+    if DOC_IMPOR_RX.search(text):
+        return dict(empty, segmentation_method="doc_import")
+
+    text = SEG_HEADER_BLOCK_RX.sub("", text)
+    text = text.replace('\u00A0', ' ').replace('\r\n', '\n').replace('\r', '\n')
+
+    text_cleaned = normalize_whitespace(drop_noise_lines(text))
+
+    if not text_cleaned:
+        return dict(empty, segmentation_method="empty_after_cleaning")
+
+    sections = detect_sections(text)
+
+    if has_postop_content(sections):
+        method = "postop_sections"
+        result = extract_postop_sections(sections)
+    else:
+        prescription = get_prescription_sortie_content(sections)
+
+        if prescription:
+            method = "prescription_sortie_fallback"
+            result = "PRESCRIPTION DE SORTIE\n" + prescription
+        else:
+            triggered = extract_by_keywords(text_cleaned)
+
+            if triggered:
+                method = "keyword_fallback"
+                result = triggered
+            else:
+                method = "full_text_fallback"
+                result = text_cleaned
+
+    result = normalize_whitespace(
+        remove_pure_med_lists(remove_bio_tables(result))
+    )
+
+    return {
+        "cr_text_cleaned": result,
+        "sentences_json": json.dumps(
+            segment_sentences(result), ensure_ascii=False
+        ),
+        "segmentation_method": method,
+        "original_length": original_length,
+        "cleaned_length": len(result),
+        "reduction_percent": round(100 * (1 - len(result) / original_length), 1),
+    }
+
+
+def apply_segmentation(df):
+    df = df.copy()
+
+    results = df["cr_text_brut"].apply(segment_cr_with_metadata)
+
+    for key in [
+        "cr_text_cleaned", "sentences_json", "segmentation_method",
+        "original_length", "cleaned_length", "reduction_percent",
+    ]:
+        df[key] = results.apply(lambda r, k=key: r[k])
+
+    return df
+
+
+def filter_strict(df, max_cd):
+    df = df.copy()
+
+    df = df[
+        df["cr_text_cleaned"].astype(str).str.strip().str.len() > 0
+    ].copy()
+
+    df["cd_manuel"] = pd.to_numeric(df["cd_manuel"], errors="coerce")
+    df = df[df["cd_manuel"].between(1, max_cd)].copy()
+    df["cd_manuel"] = df["cd_manuel"].astype(int)
+
+    exclus = df["fichier_cr"].astype(str).str.contains(
+        "|".join(DOCS_A_EXCLURE), case=False, na=False
+    )
+    df = df[~exclus].copy()
+
+    chirurgie = pd.to_datetime(df["date_chirurgie"], errors="coerce")
+    rapport = pd.to_datetime(df["date_cr"], errors="coerce")
+
+    df = df[chirurgie.notna() & rapport.notna()].copy()
+
+    diff = (
+        pd.to_datetime(df["date_cr"]) - pd.to_datetime(df["date_chirurgie"])
+    ).dt.days
+
+    return df[(diff >= 0) & (diff <= 90)].copy()
+
+
+def make_group_split(df, target_classes, train_frac, random_state):
+    rng = np.random.default_rng(random_state)
+
+    counts = (
+        df.groupby(["patient_id", "cd_manuel"]).size().unstack(fill_value=0)
+    )
+
+    for c in [1, 2, 3, 4, 5]:
+        if c not in counts.columns:
+            counts[c] = 0
+
+    counts = counts[[1, 2, 3, 4, 5]]
+
+    total_per_class = counts.sum(axis=0).to_dict()
+
+    targets = {
+        c: int(np.round(total_per_class[c] * (1 - train_frac)))
+        for c in target_classes
+    }
+
+    target_val_samples = int(np.round((1 - train_frac) * len(df)))
+
+    patients = list(counts.index)
+    rng.shuffle(patients)
+
+    val_patients = set()
+    train_patients = set(patients)
+
+    val_counts = {c: 0 for c in target_classes}
+    val_samples = 0
+
+    def score(current):
+        return sum((current[c] - targets[c]) ** 2 for c in target_classes)
+
+    current_score = score(val_counts)
+
+    while True:
+        best_pid = None
+        best_score = current_score
+        best_delta = 0
+        best_counts = None
+
+        for pid in list(train_patients):
+            vector = counts.loc[pid]
+            candidate = val_counts.copy()
+
+            for c in target_classes:
+                candidate[c] += int(vector[c])
+
+            candidate_score = score(candidate)
+
+            if candidate_score < best_score:
+                best_score = candidate_score
+                best_pid = pid
+                best_delta = int(vector.sum())
+                best_counts = candidate
+
+        if best_pid is None:
+            break
+
+        val_patients.add(best_pid)
+        train_patients.remove(best_pid)
+        val_samples += best_delta
+        val_counts = best_counts
+        current_score = best_score
+
+    if val_samples < target_val_samples:
+        remaining = list(train_patients)
+        rng.shuffle(remaining)
+
+        for pid in remaining:
+            val_patients.add(pid)
+            train_patients.remove(pid)
+            val_samples += int(counts.loc[pid].sum())
+
+            if val_samples >= target_val_samples:
+                break
+
+    while val_samples > target_val_samples:
+        candidates = list(val_patients)
+        rng.shuffle(candidates)
+
+        pid_remove = min(
+            candidates,
+            key=lambda pid: counts.loc[pid][list(target_classes)].sum()
+        )
+
+        val_patients.remove(pid_remove)
+        train_patients.add(pid_remove)
+        val_samples -= int(counts.loc[pid_remove].sum())
+
+    train_df = df[df["patient_id"].isin(train_patients)].copy()
+    val_df = df[df["patient_id"].isin(val_patients)].copy()
+
+    assert not set(train_df["patient_id"]) & set(val_df["patient_id"])
+
+    return train_df, val_df
+
+
+def add_ccam_code(df, correspondance_path):
+    corr = pd.read_csv(correspondance_path)
+    corr["date_chirurgie"] = pd.to_datetime(corr["date_chirurgie"])
+
+    corr = corr[["id_anonymise", "date_chirurgie", "ccam_code"]].rename(
+        columns={"id_anonymise": "patient_id", "ccam_code": "major_surgery_ccam"}
+    )
+
+    corr = (
+        corr.groupby(["patient_id", "date_chirurgie"])["major_surgery_ccam"]
+        .agg(lambda x: x.iloc[0])
+        .reset_index()
+    )
+
+    df = df.drop(columns=["major_surgery_ccam"], errors="ignore").copy()
+    df["date_chirurgie"] = pd.to_datetime(df["date_chirurgie"])
+
+    merged = pd.merge(df, corr, on=["patient_id", "date_chirurgie"], how="left")
+    merged["major_surgery_ccam"] = merged["major_surgery_ccam"].fillna("N/A")
+
+    return merged
+
+
+def deduplicate(df):
+    df = df.copy()
+    df["date_chirurgie"] = pd.to_datetime(df["date_chirurgie"], errors="coerce")
+
+    rows_to_drop = []
+
+    for (pid, date_chir), group in df.groupby(["patient_id", "date_chirurgie"]):
+        sources = list(group["source"].unique())
+
+        if len(sources) < 2:
+            continue
+
+        disagreement = False
+
+        for fichier in group["fichier_cr"].unique():
+            block = group[group["fichier_cr"] == fichier]
+
+            if len(block) > 1:
+                grades = block.groupby("source")["cd_manuel"].first().to_dict()
+
+                if len(set(grades.values())) > 1:
+                    disagreement = True
+
+        if disagreement and ANNOTATEUR_PRIORITAIRE in sources:
+            keep = ANNOTATEUR_PRIORITAIRE
+        else:
+            keep = sorted(sources)[0]
+
+        mask = (
+            (df["patient_id"] == pid)
+            & (df["date_chirurgie"] == date_chir)
+            & (df["source"] != keep)
+        )
+
+        rows_to_drop.extend(df[mask].index.tolist())
+
+    return df.drop(index=rows_to_drop)
+
+
+segmented_df = apply_segmentation(reports_df)
+
+filtered_df = filter_strict(segmented_df, max_cd=5)
+
+train_df, val_df = make_group_split(
+    filtered_df,
+    target_classes=TARGET_CLASSES,
+    train_frac=TRAIN_FRAC,
+    random_state=RANDOM_STATE,
+)
+
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+for name, split_df in [("train", train_df), ("val", val_df)]:
+    split_df = add_ccam_code(split_df, CORRESPONDANCE_PATH)
+    split_df = deduplicate(split_df)
+
+    split_df.to_csv(OUTPUT_DIR / f"{name}_cd1to5.csv", index=False)

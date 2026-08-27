@@ -369,9 +369,9 @@ def run(text_col, tag, model, batch_size, n_bootstrap):
         patient = (
             report.groupby("patient_id", as_index=False)
             .agg(
-                cd_true_max=("cd_manuel", "max"),
-                cd_pred_max=("cd_pred", "max"),
-            )
+            cd_manuel=("cd_manuel", "max"),
+            cd_pred=("cd_pred", "max"),
+        )
         )
 
         patient.to_csv(
@@ -384,8 +384,8 @@ def run(text_col, tag, model, batch_size, n_bootstrap):
         bootstrap_patient = {
             key: []
             for key in scores(
-                patient["cd_true_max"],
-                patient["cd_pred_max"],
+                patient["cd_manuel"],
+                patient["cd_pred"],
             )
         }
 
@@ -402,8 +402,8 @@ def run(text_col, tag, model, batch_size, n_bootstrap):
                 len(patient),
             )
             result = scores(
-                patient["cd_true_max"].to_numpy()[idx_patient],
-                patient["cd_pred_max"].to_numpy()[idx_patient],
+                patient["cd_manuel"].to_numpy()[idx_patient],
+                patient["cd_pred"].to_numpy()[idx_patient],
             )
 
             for key in bootstrap_patient:
@@ -438,8 +438,8 @@ def run(text_col, tag, model, batch_size, n_bootstrap):
         )
 
         patient_metrics = scores(
-            patient["cd_true_max"],
-            patient["cd_pred_max"],
+            patient["cd_manuel"],
+            patient["cd_pred"],
             detailed=True,
         )
 

@@ -1,4 +1,4 @@
-
+import argparse
 import json
 import os
 import re
@@ -365,8 +365,8 @@ def run_config(
     patient = (
         df.groupby("patient_id", as_index=False)
         .agg(
-            cd_true_max=("cd_manuel", "max"),
-            cd_pred_max=("cd_pred", "max"),
+            cd_manuel=("cd_manuel", "max"),
+            cd_pred=("cd_pred", "max"),
         )
     )
 
@@ -376,19 +376,19 @@ def run_config(
     )
 
     patient_results = scores(
-        patient["cd_true_max"],
-        patient["cd_pred_max"],
+        patient["cd_manuel"],
+        patient["cd_pred"],
     )
 
     patient_results["confusion_matrix"] = confusion_matrix(
-        patient["cd_true_max"],
-        patient["cd_pred_max"],
+        patient["cd_manuel"],
+        patient["cd_pred"],
         labels=LABELS,
     ).tolist()
 
     patient_results["classification_report"] = classification_report(
-        patient["cd_true_max"],
-        patient["cd_pred_max"],
+        patient["cd_manuel"],
+        patient["cd_pred"],
         labels=LABELS,
         target_names=LABEL_NAMES,
         output_dict=True,
@@ -403,8 +403,8 @@ def run_config(
     )
 
     bootstrap_patient = bootstrap(
-        patient["cd_true_max"],
-        patient["cd_pred_max"],
+        patient["cd_manuel"],
+        patient["cd_pred"],
         n_bootstrap,
         seed,
     )

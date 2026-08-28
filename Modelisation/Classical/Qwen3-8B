@@ -277,18 +277,20 @@ def run(text_col, tag, model, batch_size, n_bootstrap):
     result_dir = OUTPUT_DIR / f"text_{tag}"
     result_dir.mkdir(parents=True, exist_ok=True)
 
-    tracker = OfflineEmissionsTracker(
+    total_start = time.perf_counter()
+
+    embedding_tracker = OfflineEmissionsTracker(
         project_name="THANATOS",
-        experiment_id=f"qwen3_embedding_{tag}",
+        experiment_id=f"qwen3_embedding_{tag}_encoding",
         output_dir=str(result_dir),
-        output_file="emissions.csv",
+        output_file="emissions_embeddings.csv",
         log_level="critical",
         tracking_mode="process",
         country_iso_code="FRA",
     )
 
-    tracker.start()
-    start = time.perf_counter()
+    embedding_tracker.start()
+    embedding_start = time.perf_counter()
 
     X_train = encode_documents(
         model,
@@ -301,6 +303,22 @@ def run(text_col, tag, model, batch_size, n_bootstrap):
         val[text_col].tolist(),
         batch_size,
     )
+
+    embedding_tracker.stop()
+    embedding_wall_seconds = time.perf_counter() - embedding_start
+
+    classifier_tracker = OfflineEmissionsTracker(
+        project_name="THANATOS",
+        experiment_id=f"qwen3_embedding_{tag}_classifiers",
+        output_dir=str(result_dir),
+        output_file="emissions_classifiers.csv",
+        log_level="critical",
+        tracking_mode="process",
+        country_iso_code="FRA",
+    )
+
+    classifier_tracker.start()
+    classifier_start = time.perf_counter()
 
     X_train_knn = normalize(X_train, norm="l2")
     X_val_knn = normalize(X_val, norm="l2")
@@ -321,8 +339,7 @@ def run(text_col, tag, model, batch_size, n_bootstrap):
         y=y_train,
     )
 
-    model_results = {}
-    comparison = []
+    fitted = {}
     best_model = None
     best_score = -np.inf
 
@@ -358,7 +375,19 @@ def run(text_col, tag, model, batch_size, n_bootstrap):
         )
 
         pred = grid.best_estimator_.predict(X_test)
+        fitted[name] = (grid, pred)
 
+        if grid.best_score_ > best_score:
+            best_score = float(grid.best_score_)
+            best_model = name
+
+    classifier_tracker.stop()
+    classifier_wall_seconds = time.perf_counter() - classifier_start
+
+    model_results = {}
+    comparison = []
+
+    for name, (grid, pred) in fitted.items():
         report = val.copy()
         report["cd_pred"] = pred
         report.to_csv(
@@ -369,9 +398,9 @@ def run(text_col, tag, model, batch_size, n_bootstrap):
         patient = (
             report.groupby("patient_id", as_index=False)
             .agg(
-            cd_manuel=("cd_manuel", "max"),
-            cd_pred=("cd_pred", "max"),
-        )
+                cd_manuel=("cd_manuel", "max"),
+                cd_pred=("cd_pred", "max"),
+            )
         )
 
         patient.to_csv(
@@ -463,31 +492,57 @@ def run(text_col, tag, model, batch_size, n_bootstrap):
             }
         )
 
-        if grid.best_score_ > best_score:
-            best_score = float(grid.best_score_)
-            best_model = name
-
-    tracker.stop()
-    wall_seconds = time.perf_counter() - start
+    wall_seconds = time.perf_counter() - total_start
 
     pd.DataFrame(comparison).to_csv(
         result_dir / "all_classifiers_comparison.csv",
         index=False,
     )
 
-    emissions = {}
-    emissions_path = result_dir / "emissions.csv"
+    energy_report = {}
 
-    if emissions_path.exists():
-        energy = pd.read_csv(emissions_path)
+    for stage, filename, stage_wall_seconds in [
+        ("encoding", "emissions_embeddings.csv", embedding_wall_seconds),
+        ("training", "emissions_classifiers.csv", classifier_wall_seconds),
+    ]:
+        emissions_path = result_dir / filename
+        codecarbon = {}
 
-        if not energy.empty:
-            row = energy.iloc[-1]
-            emissions = {
-                "duration_seconds": float(row.get("duration", 0)),
-                "energy_kwh": float(row.get("energy_consumed", 0)),
-                "emissions_kg_co2eq": float(row.get("emissions", 0)),
-            }
+        if emissions_path.exists():
+            energy = pd.read_csv(emissions_path)
+
+            if not energy.empty:
+                row = energy.iloc[-1]
+                codecarbon = {
+                    "duration_seconds": float(row.get("duration", 0)),
+                    "energy_kwh": float(row.get("energy_consumed", 0)),
+                    "emissions_kg_co2eq": float(row.get("emissions", 0)),
+                    "cpu_power_watts": float(row.get("cpu_power", 0)),
+                    "gpu_power_watts": float(row.get("gpu_power", 0)),
+                    "ram_power_watts": float(row.get("ram_power", 0)),
+                    "cpu_model": str(row.get("cpu_model", "")),
+                    "gpu_model": str(row.get("gpu_model", "")),
+                }
+
+        energy_report[stage] = {
+            "wall_seconds": float(stage_wall_seconds),
+            "codecarbon": codecarbon,
+        }
+
+    emissions = {
+        "duration_seconds": sum(
+            stage["codecarbon"].get("duration_seconds", 0)
+            for stage in energy_report.values()
+        ),
+        "energy_kwh": sum(
+            stage["codecarbon"].get("energy_kwh", 0)
+            for stage in energy_report.values()
+        ),
+        "emissions_kg_co2eq": sum(
+            stage["codecarbon"].get("emissions_kg_co2eq", 0)
+            for stage in energy_report.values()
+        ),
+    }
 
     summary = {
         "train_csv": str(TRAIN_PATH),
@@ -533,6 +588,7 @@ def run(text_col, tag, model, batch_size, n_bootstrap):
         "models": model_results,
         "wall_seconds": float(wall_seconds),
         "energy": emissions,
+        "energy_report": energy_report,
     }
 
     (result_dir / "paper_summary.json").write_text(

@@ -1,0 +1,208 @@
+import json
+from pathlib import Path
+
+import matplotlib.pyplot as plt
+import pandas as pd
+
+BASE = Path("/export/home/cse240018/24STS-THANATOS_LRS/24STS-THANATOS_results")
+OUT = BASE / "Performances"
+
+OUT.mkdir(parents=True, exist_ok=True)
+
+SOURCES = [
+    ("Gemma 3 4B", "Zero-shot", BASE / "llm_gemma3_4b_bf16_cd1to5", "llm"),
+    ("MedGemma 4B", "Zero-shot", BASE / "llm_medgemma4b_bf16_cd1to5", "llm"),
+    ("Ministral 3B", "Zero-shot", BASE / "llm_ministral3b_bf16_cd1to5", "llm"),
+    ("Gemma 3 27B", "Zero-shot", BASE / "llm_gemma3_27b_bf16_cd1to5", "llm"),
+    ("MedGemma 27B", "Zero-shot", BASE / "llm_medgemma27b_bf16_cd1to5", "llm"),
+    ("Mistral Small 3.2 24B", "Zero-shot", BASE / "llm_mistral24b_bf16_cd1to5", "llm"),
+    ("Gemma 3 4B", "QLoRA", BASE / "gemma3_4b_qlora_traineval_cd1to5", "qlora"),
+    ("MedGemma 4B", "QLoRA", BASE / "medgemma_4b_qlora_traineval_cd1to5", "qlora"),
+    ("Ministral 3B", "QLoRA", BASE / "lora_ministral3b_nf4_cd1to5", "qlora"),
+    ("Gemma 3 27B", "QLoRA", BASE / "gemma3_27b_qlora_traineval_cd1to5", "qlora"),
+    ("MedGemma 27B", "QLoRA", BASE / "medgemma27b_qlora_traineval_cd1to5", "qlora"),
+    ("Mistral Small 3.2 24B", "QLoRA", BASE / "mistral24b_qlora_traineval_cd1to5", "qlora"),
+]
+
+COLORS = {
+    "Mistral Small 3.2 24B": "#0B4F8A",
+    "Ministral 3B": "#5B9BD5",
+    "MedGemma 27B": "#B04A00",
+    "MedGemma 4B": "#F0A030",
+    "Gemma 3 27B": "#1B7F5A",
+    "Gemma 3 4B": "#66C2A5",
+}
+
+OFFSETS = {
+    "MedGemma 4B QLoRA": (9, -12),
+    "Gemma 3 27B zero-shot": (9, 6),
+    "MedGemma 27B zero-shot": (-9, -12),
+    "Gemma 3 4B QLoRA": (9, -12),
+    "Ministral 3B zero-shot": (9, -11),
+}
+
+energy = pd.read_csv(OUT / "CodeCarbon.csv", low_memory=False)
+candidates = []
+
+for model, method, directory, schema in SOURCES:
+    for path in sorted(directory.rglob("paper_summary.json")):
+        summary = json.loads(path.read_text(encoding="utf-8"))
+
+        if schema == "llm":
+            text = "Cleaned" if "cleaned" in summary["text_col"] else "Raw"
+            strategy = "One-step" if summary["mode"] == "direct" else "Two-step"
+        else:
+            text = summary["text_mode"].title()
+            strategy = "One-step" if summary["target_mode"] == "direct" else "Two-step"
+
+        candidates.append(
+            {
+                "Model": model,
+                "Method": method,
+                "Text": text,
+                "Strategy": strategy,
+                "Kappa": float(
+                    summary["val_results_patient_level"]["kappa_quadratic"]
+                ),
+            }
+        )
+
+candidates = pd.DataFrame(candidates)
+
+best = (
+    candidates.sort_values(
+        ["Model", "Method", "Kappa"],
+        ascending=[True, True, False],
+        kind="stable",
+    )
+    .drop_duplicates(["Model", "Method"], keep="first")
+)
+
+points = []
+
+for _, row in best.iterrows():
+    block = energy.loc[
+        (energy["Model"] == row["Model"])
+        & (energy["Method"] == row["Method"])
+        & (energy["Text"] == row["Text"])
+        & (energy["Strategy"] == row["Strategy"])
+    ]
+
+    if row["Method"] == "Zero-shot":
+        block = block.loc[block["Stage"] == "Inference"]
+    else:
+        block = block.loc[block["Stage"].isin(["Training", "Inference"])]
+
+    points.append(
+        {
+            "Model": row["Model"],
+            "Method": row["Method"],
+            "Kappa": row["Kappa"],
+            "Energy": float(block["Energy (kWh)"].sum()),
+            "Label": (
+                f'{row["Model"]} QLoRA'
+                if row["Method"] == "QLoRA"
+                else f'{row["Model"]} zero-shot'
+            ),
+        }
+    )
+
+points = sorted(points, key=lambda row: row["Energy"])
+
+frontier = []
+ceiling = float("-inf")
+
+for point in points:
+    if point["Kappa"] > ceiling:
+        frontier.append(point)
+        ceiling = point["Kappa"]
+
+figure, axis = plt.subplots(figsize=(9.5, 6.0))
+
+x_min = min(point["Energy"] for point in points) / 2.2
+x_max = max(point["Energy"] for point in points) * 2.6
+
+step_x = [x_min]
+step_y = [frontier[0]["Kappa"]]
+
+for point in frontier:
+    step_x.extend([point["Energy"], point["Energy"]])
+    step_y.extend([step_y[-1], point["Kappa"]])
+
+step_x.append(x_max)
+step_y.append(step_y[-1])
+
+axis.fill_between(
+    step_x,
+    0,
+    step_y,
+    color="#000000",
+    alpha=0.045,
+    zorder=0,
+)
+axis.plot(
+    step_x,
+    step_y,
+    linestyle="--",
+    color="#9A8420",
+    linewidth=1.2,
+    zorder=1,
+)
+
+for point in points:
+    on_frontier = point in frontier
+    color = COLORS[point["Model"]]
+    filled = point["Method"] == "QLoRA"
+
+    axis.scatter(
+        point["Energy"],
+        point["Kappa"],
+        s=150 if on_frontier else 95,
+        marker="o",
+        facecolor=color if filled else "#FFFFFF",
+        edgecolor=color,
+        linewidth=1.6,
+        zorder=3,
+    )
+
+    dx, dy = OFFSETS.get(point["Label"], (9, 5))
+
+    axis.annotate(
+        point["Label"],
+        (point["Energy"], point["Kappa"]),
+        xytext=(dx, dy),
+        textcoords="offset points",
+        fontsize=8.5,
+        family="Serif",
+        ha="right" if dx < 0 else "left",
+        fontweight="bold" if on_frontier else "normal",
+    )
+
+axis.set_xscale("log")
+axis.set_xlim(x_min, x_max)
+axis.set_xlabel("Measured energy (kWh)", fontsize=11, family="Serif")
+axis.set_ylabel(
+    "Patient-level quadratic weighted κ",
+    fontsize=11,
+    family="Serif",
+)
+axis.grid(alpha=0.25, which="both")
+axis.set_axisbelow(True)
+
+for spine in ["top", "right"]:
+    axis.spines[spine].set_visible(False)
+
+lower = min(point["Kappa"] for point in points)
+upper = max(point["Kappa"] for point in points)
+axis.set_ylim(lower - 0.06, upper + 0.05)
+
+figure.savefig(
+    OUT / "FigureS7.pdf",
+    bbox_inches="tight",
+)
+figure.savefig(
+    OUT / "FigureS7.png",
+    dpi=300,
+    bbox_inches="tight",
+)
+plt.close(figure)

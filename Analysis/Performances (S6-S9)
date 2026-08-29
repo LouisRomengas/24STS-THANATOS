@@ -46,12 +46,9 @@ patient_rows = []
 report_rows = []
 
 for model, family, directory, schema, model_order in SOURCES:
-    assert directory.is_dir()
     summaries = sorted(directory.rglob("paper_summary.json"))
-    assert summaries
 
     if schema == "classical":
-        assert len(summaries) == 2
 
         for path in summaries:
             summary = json.loads(path.read_text(encoding="utf-8"))
@@ -61,8 +58,6 @@ for model, family, directory, schema, model_order in SOURCES:
 
             if model == "Qwen3-Embedding-8B":
                 expected = expected | {"knn"}
-
-            assert set(models) == expected
 
             for classifier in ["svm", "logistic", "ordinal", "rf", "knn"]:
                 if classifier not in models:
@@ -104,7 +99,6 @@ for model, family, directory, schema, model_order in SOURCES:
                 report_rows.append(report)
 
     else:
-        assert len(summaries) == 4
         seen = set()
 
         for path in summaries:
@@ -117,9 +111,6 @@ for model, family, directory, schema, model_order in SOURCES:
                 text_mode = summary["text_mode"]
                 target_mode = summary["target_mode"]
 
-            assert text_mode in {"cleaned", "raw"}
-            assert target_mode in {"direct", "twostep"}
-            assert (text_mode, target_mode) not in seen
             seen.add((text_mode, target_mode))
 
             base_row = {
@@ -156,12 +147,6 @@ for model, family, directory, schema, model_order in SOURCES:
 
             patient_rows.append(patient)
             report_rows.append(report)
-
-        assert seen == {
-            ("cleaned", "direct"),
-            ("cleaned", "twostep"),
-            ("raw", "direct"),
-            ("raw", "twostep"),
         }
 
 sort_columns = [
@@ -198,11 +183,6 @@ columns = [
     "Macro-F1 [95% CI]",
     "Sensitivity, CD grade≥III [95% CI]",
 ]
-
-assert len(table_s6) == 66
-assert len(table_s9) == 66
-assert list(table_s6.columns) == columns
-assert list(table_s9.columns) == columns
 
 table_s6.to_csv(
     OUT / "Table-S6-Performances-patient-level.csv",

@@ -16,9 +16,8 @@ The repository contains code for:
 - zero-shot LLM inference
 - QLoRA fine-tuning and evaluation
 - patient-level and report-level performance analyses
-- bootstrap confidence intervals and paired model comparisons
 - error and subgroup analyses
-- computational-cost and CodeCarbon analyses
+- CodeCarbon analyses
 - generation of manuscript tables and figures
 
 ## Software environment

@@ -34,11 +34,18 @@ COLORS = {
 }
 
 OFFSETS = {
+    "MedGemma 4B zero-shot": (9, 7),
+    "Gemma 3 4B zero-shot": (9, -12),
+    "Ministral 3B zero-shot": (9, 7),
+    "Mistral Small 3.2 24B zero-shot": (9, 7),
+    "MedGemma 27B zero-shot": (-9, 8),
+    "Gemma 3 27B zero-shot": (9, -13),
+    "Gemma 3 4B QLoRA": (-9, -12),
+    "Ministral 3B QLoRA": (9, -2),
     "MedGemma 4B QLoRA": (9, -12),
-    "Gemma 3 27B zero-shot": (9, 6),
-    "MedGemma 27B zero-shot": (-9, -12),
-    "Gemma 3 4B QLoRA": (9, -12),
-    "Ministral 3B zero-shot": (9, -11),
+    "MedGemma 27B QLoRA": (-9, -12),
+    "Mistral Small 3.2 24B QLoRA": (9, 7),
+    "Gemma 3 27B QLoRA": (9, -12),
 }
 
 energy = pd.read_csv(OUT / "CodeCarbon.csv", low_memory=False)
@@ -182,7 +189,7 @@ axis.set_xscale("log")
 axis.set_xlim(x_min, x_max)
 axis.set_xlabel("Measured energy (kWh)", fontsize=11, family="Serif")
 axis.set_ylabel(
-    "Patient-level quadratic weighted κ",
+    r"Patient-level $k_{\mathrm{QW}}$",
     fontsize=11,
     family="Serif",
 )

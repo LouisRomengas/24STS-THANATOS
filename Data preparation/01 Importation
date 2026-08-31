@@ -148,11 +148,6 @@ def get_patient_procedures(spark, major_surgery_ccam_codes, current_surgery_type
     """)
     major_surgeries_independent.createOrReplaceTempView("major_surgeries")
 
-    print(
-        "Chirurgies majeures independantes 2020-2022 :",
-        major_surgeries_independent.count()
-    )
-
     if current_surgery_type is not None and current_surgery_type in surgery_types:
         all_surgery_types_codes = []
 
@@ -183,11 +178,6 @@ def get_patient_procedures(spark, major_surgery_ccam_codes, current_surgery_type
             SELECT COUNT(DISTINCT person_id) AS count
             FROM multiple_surgery_types_same_day
         """).collect()[0]["count"]
-
-        print(
-            "Patients avec plusieurs types de chirurgies le meme jour :",
-            multiple_surgeries_count
-        )
 
         spark.sql("""
         CREATE OR REPLACE TEMPORARY VIEW patient_surgeries AS
@@ -305,13 +295,9 @@ def get_patient_procedures(spark, major_surgery_ccam_codes, current_surgery_type
         WHERE is_document_annule = true
     """).collect()[0]["count"]
 
-    print("CR contenant 'DOCUMENT ANNULE' :", annule_notes_count)
-
     empty_notes_count = spark.sql("""
         SELECT COUNT(*) AS count FROM all_clinical_reports WHERE is_empty = true
     """).collect()[0]["count"]
-
-    print("CR vides :", empty_notes_count)
 
     spark.sql("""
     CREATE OR REPLACE TEMPORARY VIEW clinical_reports AS
